@@ -4,8 +4,17 @@ This project is a collection of some potentially useful "commands" for the C256 
 
 ## Utilities
 
-* MKBOOT: Make a disk bootable
+* [MKBOOT](docs/mkboot.md): Make a disk bootable
 
 ## Building
 
-Wibble
+Just as an experiment, I have set this project up to be buildable using a Makefile. I'm using the version of make in the Windows Services for Linux
+package under Windows 10, but other versions should work too.
+
+    make all
+
+to build all of the utilities. The associated `PGX` and `LST` files will appear in the build directory.
+
+    make clean
+
+to remove all build targets.
