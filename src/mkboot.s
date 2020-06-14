@@ -20,11 +20,8 @@
 ;
 
 DOS_SECTOR = $020000
-
 BIOS_DEV_FDC = 0            ; Device ID for the FDC
-
 BPB_SIGNATURE = 510         ; Position of the signature bytes in the boot sector
-
 CMD_MOTOR_ON = 1            ; Command code to turn on the spindle motor
 CMD_MOTOR_OFF = 2           ; Command code to turn off the spindle motor
 
@@ -48,39 +45,38 @@ START               PHX
                     PHD
                     PHP
 
-                    setxl
-                    setas
-
                     setdbr `START
                     setdp SDOS_VARIABLES
 
-scan_for_space      LDA [DOS_RUN_PTR]           ; Get the character from the parameters
-                    BEQ PRINT_USAGE             ; If NULL, we don't have the info we need... just quit
+                    setxl
+scan_for_space      setas
+                    LDA [DOS_RUN_PARAM]         ; Get the character from the parameters
+                    BEQ PATH_NOT_FOUND          ; If NULL, we don't have the info we need... just quit
                     CMP #' '                    ; If it's a SPACE...
                     BEQ trim_head               ; ... then eat the rest of the spaces
 
                     setal
-                    INC DOS_RUN_PTR             ; Move to the next character
+                    INC DOS_RUN_PARAM           ; Move to the next character
                     BNE scan_for_space
-                    INC DOS_RUN_PTR+2
+                    INC DOS_RUN_PARAM+2
                     BRA scan_for_space
 
 trim_head           setal
-                    INC DOS_RUN_PTR             ; Move to the next character
+                    INC DOS_RUN_PARAM           ; Move to the next character
                     BNE eat_space
-                    INC DOS_RUN_PTR+2
+                    INC DOS_RUN_PARAM+2
 
 eat_space           setas
-                    LDA [DOS_RUN_PTR]           ; Get the character from the parameters
-                    BEQ PRINT_USAGE             ; If it's NULL, we didn't get what we need... just quit
+                    LDA [DOS_RUN_PARAM]         ; Get the character from the parameters
+                    BEQ PATH_NOT_FOUND          ; If it's NULL, we didn't get what we need... just quit
                     CMP #' '                    ; If it's a SPACE...
                     BEQ trim_head               ; ... eat it
 
                     CMP #'@'                    ; Verify that the parameters start with a drive specification
-                    BNE PRINT_USAGE             ; If not: print the usage message
+                    BNE DEV_NOT_FOUND           ; If not: print the usage message
 
                     LDY #1
-                    LDA [DOS_RUN_PTR],Y         ; Check the next character
+                    LDA [DOS_RUN_PARAM],Y       ; Check the next character
                     CMP #'f'                    ; If 'f' or 'F'
                     BEQ fdc_case                ; ... make the floppy disk bootable
                     CMP #'F'
@@ -88,20 +84,39 @@ eat_space           setas
 
                     ; TODO: support the IDE and SDC
 
-PRINT_USAGE         LDX #<>MSG_USAGE            ; Print a usage message
-                    JSL PUTS
-
                     setaxl
+
+                    LDX #<>MSG_BADDEV           ; Return a bad device code error
+PRINT_ERROR         JSL PUTS
+
+PRINT_USAGE         setaxl
+                    LDX #<>MSG_USAGE           ; Print the usage message
+                    JSL PUTS
+                    BRA RETURN1
+
+PATH_NOT_FOUND      setaxl
+                    LDX #<>MSG_NOPATH           ; Return a path not found error
+                    BRA PRINT_ERROR
+
+DEV_NOT_FOUND       setaxl
+                    LDX #<>MSG_NODEV           ; Return device not found error
+                    BRA PRINT_ERROR
+
+fdc_case            JSR FDC_WRITEVBR            ; Attempt to make the disk bootable
+                    BCS RETURN0
+                    
+                    setaxl
+                    LDX #<>MSG_NOFDC           ; Print an error message that we couldn't make the floppy disk bootable      
+                    JSL PUTS
+                    LDA #2
+                    BRA RETURN
+
+RETURN1             setaxl                      ; Return error code 1
                     LDA #1
                     BRA RETURN
 
-fdc_case            JSR FDC_WRITEVBR            ; Attempt to make the disk bootable
-                    BCC FDC_FAILED
-
-; Return to the caller
-RETURN0             setaxl
+RETURN0             setaxl                      ; Return 0
                     LDA #0
-
 RETURN              PLP
                     PLD
                     PLB
@@ -109,34 +124,42 @@ RETURN              PLP
                     PLX
                     RTL
 
-FDC_FAILED          LDX #<>MSG_NOFDC            ; Print an error message that we couldn't make the floppy disk bootable
-                    JSL PUTS
-
-                    setaxl
-                    LDA #2
-                    BRA RETURN
+DEFAULT_PARAMS      .null "@s:mkboot.pgx @f:sample.pgx Hello"
+MSG_USAGE           .null "USAGE: MKBOOT.PGX <path>", 13
+MSG_NOFDC           .null "Could not make the floppy disk bootable.", 13
+MSG_NOPATH          .null "No boot path was found.", 13, 13
+MSG_NODEV           .null "No device name found.", 13, 13
+MSG_BADDEV          .null "Bad device name.", 13, 13
+MSG_NOMOUNT         .null "Could not mount floppy drive.", 13, 13
 
 ;
 ; Write a volume block record to the floppy drive
 ;
 ; Inputs:
-;   DOS_RUN_PTR = pointer to the path to the binary to execute (0 for non-booting)
+;   DOS_RUN_PARAM = pointer to the path to the binary to execute (0 for non-booting)
 ;
 FDC_WRITEVBR        .proc
+                    PHB
+                    PHD
                     PHP
+
+                    setdbr `START
+                    setdp SDOS_VARIABLES
+
                     TRACE "FDC_WRITEVBR"
 
                     setas
                     LDA #BIOS_DEV_FDC
-                    STA BIOS_DEV
+                    STA @b BIOS_DEV
 
-                    LDA #CMD_MOTOR_ON           ; Send command to turn on the motor
-                    JSL CMDBLOCK
+                    JSL F_MOUNT                 ; Attempt to mount the floppy
+                    BCS clr_buffer
+                    BRL ret_failure
 
-                    setaxl
+clr_buffer          setaxl
                     LDA #0                      ; Clear the sector buffer
                     LDX #0
-clr_loop            STA DOS_SECTOR,X
+clr_loop            STA @l DOS_SECTOR,X
                     INX
                     INX
                     CPX #512
@@ -144,16 +167,16 @@ clr_loop            STA DOS_SECTOR,X
 
                     setas
                     LDX #0                      ; Copy the prototype VBR to the sector buffer
-copy_loop           LDA FDC_VBR_BEGIN,X
-                    STA DOS_SECTOR,X
+copy_loop           LDA @w FDC_VBR_BEGIN,X
+                    STA @l DOS_SECTOR,X
                     INX
                     CPX #<>(FDC_VBR_END - FDC_VBR_BEGIN + 1)
                     BNE copy_loop
 
                     LDY #0                      ; Copy the boot binary path to the VBR
                     LDX #FDC_VBR_PATH
-path_copy_loop      LDA [DOS_RUN_PTR],Y
-                    STA DOS_SECTOR,X
+path_copy_loop      LDA [DOS_RUN_PARAM],Y
+                    STA @l DOS_SECTOR,X
                     BEQ path_copy_done
                     INX
                     INY
@@ -166,26 +189,28 @@ path_copy_done      setal
 
                     setal
                     LDA #<>DOS_SECTOR           ; Point to the BIOS buffer
-                    STA BIOS_BUFF_PTR
+                    STA @b BIOS_BUFF_PTR
                     LDA #`DOS_SECTOR
-                    STA BIOS_BUFF_PTR+2
+                    STA @b BIOS_BUFF_PTR+2
 
                     LDA #0                      ; Set the sector to #0 (boot record)
-                    STA BIOS_LBA
-                    STA BIOS_LBA+2
+                    STA @b BIOS_LBA
+                    STA @b BIOS_LBA+2
 
                     setas
                     LDA #BIOS_DEV_FDC
-                    STA BIOS_DEV
+                    STA @b BIOS_DEV
 
                     JSL PUTBLOCK                ; Attempt to write the boot record
                     BCS ret_success
 
-                    setas
+ret_failure         setas
                     LDA #CMD_MOTOR_OFF          ; Send command to turn off the motor
                     JSL CMDBLOCK
 
                     PLP
+                    PLD
+                    PLB
                     CLC
                     RTS
 
@@ -194,6 +219,8 @@ ret_success         setas
                     JSL CMDBLOCK
 
                     PLP
+                    PLD
+                    PLB
                     SEC
                     RTS
                     .pend
@@ -249,6 +276,3 @@ lock                NOP                     ; And lock up
 message             .null "Could not find a bootable binary.",13
                     .bend
 FDC_VBR_END
-
-MSG_USAGE           .null "USAGE: MKBOOT.PGX <path>",13
-MSG_NOFDC           .null "Could not make the floppy disk bootable.",13
