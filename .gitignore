@@ -1,2 +1,6 @@
 build/mkboot.lst
 build/mkboot.pgx
+build/mkboot.hex
+build/mkboot.lbl
+build/mkboot.lbl
+*.lbl
